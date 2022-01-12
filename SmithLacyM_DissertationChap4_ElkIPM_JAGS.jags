@@ -1,0 +1,465 @@
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Lacy M. Smith, December 2021
+#
+# JAGS code for northern Yellowstone elk Integrated
+# Population Model.  
+# Refer to Dissertation Chapter 4 for detailed methods,
+# available @ https://digitalcommons.usu.edu/etd/8339/
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+# Data for Weibull protortional hazards adult elk survival model 
+# Cause-specific mortality (wolf and all "other" causes)
+
+data{
+
+for(t in 1:years){	
+    for(i in 1:(n_obs[t])){	
+      	one.wolf[t,i] <- 1  
+	one.other[t,i] <- 1 
+	    
+    }
+  }   
+}
+
+model {
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 1. Adult (>= 2 yrs old) female elk survival
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#--------------------------------------------------------
+# 1A. Define the parameter constraints
+#--------------------------------------------------------
+
+# All years of model
+
+for(t in 1:years){
+    for(i in 1:(n_obs[t])){
+
+	    log(lambda.wolf[t,i]) <- alpha.wolf + beta.w[agecat[t,i]]  + 
+	                              ifelse(agecat[t,i]==1, eta.old[t,1], eta.adult[t,1])
+	    
+	    log(lambda.other[t,i]) <- alpha.other + beta.o[agecat[t,i]] +
+	                              ifelse(agecat[t,i]==1, eta.old[t,2], eta.adult[t,2])
+     
+    }			
+  }
+
+#--------------------------------------------------------
+# 1B. Define the prior distributions
+#--------------------------------------------------------
+
+# Weibull shape parameters 
+
+    shape.wolf ~ dexp(0.01)	
+    shape.other ~ dexp(0.01)	
+   
+
+# Weibull scale hyper-parameters
+
+    alpha.wolf ~ dnorm(0,1.0E-6)
+    alpha.other ~ dnorm(0,1.0E-6)
+  
+    beta.w[1] <- 0
+    beta.w[2] ~ dnorm(0, 1.0E-6)
+
+    beta.o[1] <- 0
+    beta.o[2] ~ dnorm(0, 1.0E-6)
+
+
+# Prior for year random-effect
+
+for (t in 1:years){ 
+
+  eta.old[t,1:2] ~ dmnorm.vcov(rep(0,2), Sigma.old[,])     # where Sigma denotes the var-cov matrix
+  eta.adult[t,1:2] ~ dmnorm.vcov(rep(0,2), Sigma.adult[,])
+
+}
+
+# Build Sigma
+
+for (r in 1:2){
+
+  sig.mort[r] ~ dunif(0.001,5)
+
+}
+
+rho.old ~ dnorm(-0.36,25)T(-1,1)  # correlation coefficient 
+rho.adult ~ dnorm(-0.26,12.5)T(-1,1) # correlation coefficient  
+
+for (r in 1:2){
+
+  Sigma.old[r,r] <- sig.mort[r] * sig.mort[r] # variances on diagonal
+  Sigma.adult[r,r] <- sig.mort[r] * sig.mort[r] # variances on diagonal
+
+}
+
+Sigma.old[1,2] <- sig.mort[1] * sig.mort[2] * rho.old  # covariance on off-diagonal
+Sigma.old[2,1] <- Sigma.old[1,2]
+
+Sigma.adult[1,2] <- sig.mort[1] * sig.mort[2] * rho.adult  # covariance on off-diagonal
+Sigma.adult[2,1] <- Sigma.adult[1,2]
+
+
+#--------------------------------------------------------
+# 1C. Likelihood of the survival dataset
+#--------------------------------------------------------
+
+# Years of data
+
+for(t in 1:8){
+		
+  for(i in 1:(n_obs[t])){
+
+      one.wolf[t,i] ~ dinterval(exit_wolf[t,i], censor_wolf[t,i])	
+      exit_wolf[t,i] ~ dweib(shape.wolf,lambda.wolf[t,i])T(enter[t,i], )
+ 
+      one.other[t,i] ~ dinterval(exit_other[t,i], censor_other[t,i])	
+      exit_other[t,i] ~ dweib(shape.other,lambda.other[t,i])T(enter[t,i], )
+
+        }
+}
+
+for(t in 11:17){
+		
+  for(i in 1:(n_obs[t])){
+
+      one.wolf[t,i] ~ dinterval(exit_wolf[t,i], censor_wolf[t,i])	
+      exit_wolf[t,i] ~ dweib(shape.wolf,lambda.wolf[t,i])T(enter[t,i], )
+
+      one.other[t,i] ~ dinterval(exit_other[t,i], censor_other[t,i])	
+      exit_other[t,i] ~ dweib(shape.other,lambda.other[t,i])T(enter[t,i], )
+
+  }			
+}
+  
+#--------------------------------------------------------
+# 1D. Derived Parameters
+#--------------------------------------------------------
+
+# Calculate survival and cumulative hazard
+
+for(t in 1:years){ 
+
+	scale.old.wolf[t] <- exp(alpha.wolf + beta.w[1] + eta.old[t,1])
+	scale.old.other[t] <- exp(alpha.other + beta.o[1] + eta.old[t,2] )
+				
+	cumhaz.old.wolf[t] <- scale.old.wolf[t]*365^shape.wolf 
+	cumhaz.old.other[t] <- scale.old.other[t]*365^shape.other 
+		
+	surv.old[t] <- exp(-(cumhaz.old.wolf[t] + cumhaz.old.other[t] ))
+
+
+	scale.prime.wolf[t] <- exp(alpha.wolf + beta.w[2] + eta.adult[t,1])
+	scale.prime.other[t] <- exp(alpha.other + beta.o[2] + eta.adult[t,2])
+				
+	cumhaz.prime.wolf[t] <- scale.prime.wolf[t]*365^shape.wolf 
+	cumhaz.prime.other[t] <- scale.prime.other[t]*365^shape.other 
+		
+	surv.prime[t] <- exp(-(cumhaz.prime.wolf[t] + cumhaz.prime.other[t] ))
+}
+  
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 2. Calf and yearling elk survival
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  
+# Informative prior for mean calf survival (Sc) to age 1 
+# (0.22) from Barber-Meyer et al. (2008) (Yellowstone),
+# with doubled the process variance from Raithel et al. (2007) 
+# (a meta-analysis that included Yellowstone). These values were
+# used for dbeta and dgamma.
+
+prior.sc ~ dbeta(0.27,0.96)
+alpha.sc <- logit(prior.sc)
+
+for(t in 1:years){
+
+	eta.sc[t] ~ dnorm(0, tau.sc) 
+	logit(Sc[t]) <- alpha.sc + eta.sc[t]
+
+}
+
+tau.sc <- pow(sig.sc,-2)
+var_proc.sc <- pow(sig.sc,2) 
+sig.sc ~ dgamma(8.15,37.03) 
+
+
+# Informative prior for mean yearling survival (Sy)  
+# based on Raithel et al. (2007) survival and doubled process variance. 
+# Constrain yearling survival to be below prime-aged adult survival.
+
+prior.yr ~ dbeta(9.98,1.32)
+ 
+for(t in 1:years){
+
+	Sy[t] <- prior.yr * (surv.prime[t] + 0.001)
+
+}
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 3. Elk Pregnancy
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  
+
+#--------------------------------------------------------
+# 3A. Define the parameter constraints
+#--------------------------------------------------------
+
+for (t in 1:years){ 
+
+	logit(Preg.yearl[t]) <- alphayearl + eps[t] # yearlings
+	logit(Preg.prime[t]) <- alphaprime + eps[t] # 2-14 yr olds
+	logit(Preg.old[t]) <- alphaold + eps[t]     # 15+ yr olds
+
+}
+
+#--------------------------------------------------------
+# 3B. Define the prior distributions
+#--------------------------------------------------------
+
+# Informative prior for mean pregnancy probability of 
+# yearling elk from Raithel et al. 2007 (a meta-analysis). 
+# Note there are no Yellowstone data for yearlings so the 
+# prior will heavily influence the posterior for yearlings. 
+# Vague priors for prime-aged and old elk.
+
+
+mnPyearl ~ dbeta(1.89,7.64)   # yearlings
+mnPprime ~ dbeta(1,1)  # 2-14 yr olds
+mnPold ~ dbeta(1,1)   # 15+ yr olds
+
+# convert to logit scale intercepts
+
+alphayearl <- logit(mnPyearl) 
+alphaprime <- logit(mnPprime)
+alphaold <- logit(mnPold)
+
+# Vague prior for the temporal random effect that estimates
+# temporal process variance
+
+for (t in 1:years){ 
+
+	eps[t] ~ dnorm(0, tau)
+
+}
+
+tau <- pow(sig,-2)
+var_proc <- pow(sig,2) # Process variance on the logit scale.
+sig ~ dunif(0.001,5) 
+
+#--------------------------------------------------------
+# 3C. Likelihood of the dataset
+#--------------------------------------------------------
+
+# Only the years with data.
+
+for (t in 1:3){ 
+
+	NumPreg_prime[t] ~ dbin(Preg.prime[t], NumSam_prime[t])
+	NumPreg_old[t] ~ dbin(Preg.old[t], NumSam_old[t])
+
+}
+
+for (t in 5:6){ 
+
+	NumPreg_prime[t] ~ dbin(Preg.prime[t], NumSam_prime[t])
+	NumPreg_old[t] ~ dbin(Preg.old[t], NumSam_old[t])
+
+}
+
+for (t in 11:years){ 
+
+	NumPreg_prime[t] ~ dbin(Preg.prime[t], NumSam_prime[t])
+
+}
+
+for (t in 11:13){
+
+	NumPreg_old[t] ~ dbin(Preg.old[t], NumSam_old[t])
+
+}
+
+for (t in 15:years){
+
+	NumPreg_old[t] ~ dbin(Preg.old[t], NumSam_old[t])
+
+}
+  
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 4. Elk Harvest Data Likelihood
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  
+
+# Years of harvest data (t) and across all ages of elk (1:20)
+
+for(t in 1:9){
+
+	harvest_ages[1:20,t] ~ dmulti((Nprop[1:20,t]+0.000001), harvest_tot[t])
+  
+}  
+
+ 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 5. Calf:Cow Data Likelihood
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  
+ 
+for(t in 1:years){
+
+	fcalf[t] ~ dbin((Nprop[1,t]+0.000001),totcomp[t]) 
+
+}
+ 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 6. Population Projection Matrix & Process Model
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  
+
+# 20x20 pre-breeding matrix, ages 1-20 
+
+for(t in 2:years){
+
+	N1_yearl[t] ~ dbin(Sc[t-1]*Preg.yearl[t-1], N2[t-1])
+	N1_prime[t] ~ dbin(Sc[t-1]*Preg.prime[t-1], Nprime[t-1])
+	N1_old[t] ~ dbin(Sc[t-1]*Preg.old[t-1], Nold[t-1])  
+	N1[t] <- round((N1_yearl[t] +N1_prime[t] + N1_old[t])*0.5)
+	N2[t] ~ dbin(Sy[t-1], N1[t-1]) 
+	N3[t] ~ dbin(surv.prime[t-1], N2[t-1])
+	N4[t] ~ dbin(surv.prime[t-1], N3[t-1])
+	N5[t] ~ dbin(surv.prime[t-1], N4[t-1])
+	N6[t] ~ dbin(surv.prime[t-1], N5[t-1])
+	N7[t] ~ dbin(surv.prime[t-1], N6[t-1])
+	N8[t] ~ dbin(surv.prime[t-1], N7[t-1])
+	N9[t] ~ dbin(surv.prime[t-1], N8[t-1])
+	N10[t] ~ dbin(surv.prime[t-1], N9[t-1])
+	N11[t] ~ dbin(surv.prime[t-1], N10[t-1])
+	N12[t] ~ dbin(surv.prime[t-1], N11[t-1])
+	N13[t] ~ dbin(surv.prime[t-1], N12[t-1])
+	N14[t] ~ dbin(surv.prime[t-1], N13[t-1])
+	N15[t] ~ dbin(surv.old[t-1], N14[t-1])
+	N16[t] ~ dbin(surv.old[t-1], N15[t-1])
+	N17[t] ~ dbin(surv.old[t-1], N16[t-1])
+	N18[t] ~ dbin(surv.old[t-1], N17[t-1])
+	N19[t] ~ dbin(surv.old[t-1], N18[t-1])
+	N20[t] ~ dbin(surv.old[t-1], (N19[t-1]+N20[t-1]))
+	  
+} 
+
+#--------------------------------------------------------
+# 6A. Initial population size (priors) at year 1
+#--------------------------------------------------------
+
+    	mN1[1]~dnorm(NinitY1, 0.00001)T(0,)   
+	mN2[1]~dnorm(NinitY2, 0.00001)T(0,)  
+	mN3[1]~dnorm(NinitY3, 0.00001)T(0,)  
+	mN4[1]~dnorm(NinitY4, 0.00001)T(0,) 	
+	mN5[1]~dnorm(NinitY5, 0.00001)T(0,)  
+	mN6[1]~dnorm(NinitY6, 0.00001)T(0,) 	
+	mN7[1]~dnorm(NinitY7, 0.00001)T(0,) 
+	mN8[1]~dnorm(NinitY8, 0.00001)T(0,) 	
+	mN9[1]~dnorm(NinitY9, 0.00001)T(0,)  
+	mN10[1]~dnorm(NinitY10, 0.00001)T(0,)	
+	mN11[1]~dnorm(NinitY11, 0.00001)T(0,)  
+	mN12[1]~dnorm(NinitY12, 0.00001)T(0,) 	
+	mN13[1]~dnorm(NinitY13, 0.00001)T(0,) 
+	mN14[1]~dnorm(NinitY14, 0.00001)T(0,) 	
+	mN15[1]~dnorm(NinitY15, 0.00001)T(0,)  
+	mN16[1]~dnorm(NinitY16, 0.00001)T(0,) 	 
+	mN17[1]~dnorm(NinitY17, 0.00001)T(0,) 
+	mN18[1]~dnorm(NinitY18, 0.00001)T(0,) 	
+	mN19[1]~dnorm(NinitY19, 0.00001)T(0,)  
+	mN20[1]~dnorm(NinitY20, 0.00001)T(0,) 	 
+
+    	N1[1] <- round(mN1[1])
+    	N2[1] <- round(mN2[1])
+    	N3[1] <- round(mN3[1])
+    	N4[1] <- round(mN4[1])
+    	N5[1] <- round(mN5[1])
+    	N6[1] <- round(mN6[1])
+    	N7[1] <- round(mN7[1])
+    	N8[1] <- round(mN8[1])
+    	N9[1] <- round(mN9[1])
+    	N10[1] <- round(mN10[1])
+    	N11[1] <- round(mN11[1])
+    	N12[1] <- round(mN12[1])
+    	N13[1] <- round(mN13[1])
+    	N14[1] <- round(mN14[1])
+    	N15[1] <- round(mN15[1])
+    	N16[1] <- round(mN16[1])
+    	N17[1] <- round(mN17[1])
+    	N18[1] <- round(mN18[1])
+    	N19[1] <- round(mN19[1])
+    	N20[1] <- round(mN20[1])
+
+#--------------------------------------------------------
+# 6B. Derived Population Parameters
+#--------------------------------------------------------
+
+for(t in 1:years){
+    
+    # Total population abundance
+    
+	Ntot[t] <- N1[t] + N2[t] + N3[t]+ N4[t]+ N5[t]+ N6[t]+ N7[t]+ N8[t]+ N9[t]+ N10[t]+ N11[t]+
+		   N12[t]+ N13[t]+ N14[t]+ N15[t]+ N16[t]+ N17[t]+ N18[t]+ N19[t] + N20[t]
+    
+    # Categories for pregnancy 
+
+    	Nprime[t] <-  N3[t]+ N4[t]+ N5[t]+ N6[t]+ N7[t]+ N8[t]+ N9[t]+
+                      N10[t]+ N11[t]+ N12[t]+ N13[t]+ N14[t]
+    	
+	Nold[t] <- N15[t]+ N16[t]+ N17[t]+ N18[t]+ N19[t] + N20[t]
+     
+    # Category for abundance figure
+
+    	Nyoung[t]<- N2[t] + N3[t]+ N4[t]+ N5[t]+ N6[t]+ N7[t]+ N8[t]+ N9[t]+
+                    N10[t]+ N11[t]+ N12[t]+ N13[t] + N14[t] 
+
+    # Stage class proportions (with numerical offset to prevent errors)
+          
+    	prop_young[t] <- Nyoung[t]/(Ntot[t]+ 0.000001)
+    	prop_old[t]<-Nold[t]/(Ntot[t]+ 0.000001)
+    
+    # Proportion of each age (with numerical offset to prevent errors)
+    
+	Nprop[1,t] <- N1[t]/(Ntot[t] + 0.000001)
+	Nprop[2,t] <- N2[t]/(Ntot[t] + 0.000001) 
+	Nprop[3,t] <- N3[t]/(Ntot[t] + 0.000001)
+	Nprop[4,t] <- N4[t]/(Ntot[t] + 0.000001) 
+	Nprop[5,t] <- N5[t]/(Ntot[t] + 0.000001) 
+	Nprop[6,t] <- N6[t]/(Ntot[t] + 0.000001) 
+	Nprop[7,t] <- N7[t]/(Ntot[t] + 0.000001)
+	Nprop[8,t] <- N8[t]/(Ntot[t] + 0.000001)
+	Nprop[9,t] <- N9[t]/(Ntot[t] + 0.000001) 
+	Nprop[10,t] <- N10[t]/(Ntot[t] + 0.000001) 
+	Nprop[11,t] <- N11[t]/(Ntot[t] + 0.000001)
+	Nprop[12,t] <- N12[t]/(Ntot[t] + 0.000001)
+	Nprop[13,t] <- N13[t]/(Ntot[t] + 0.000001)
+	Nprop[14,t] <- N14[t]/(Ntot[t] + 0.000001) 
+	Nprop[15,t] <- N15[t]/(Ntot[t] + 0.000001)
+	Nprop[16,t] <- N16[t]/(Ntot[t] + 0.000001)
+	Nprop[17,t] <- N17[t]/(Ntot[t] + 0.000001)
+	Nprop[18,t] <- N18[t]/(Ntot[t] + 0.000001)
+	Nprop[19,t] <- N19[t]/(Ntot[t] + 0.000001) 
+	Nprop[20,t] <- N20[t]/(Ntot[t] + 0.000001) 
+
+}
+
+# Annual growth rates (with numerical offset to prevent errors)
+
+	for(t in 2:years){
+
+		pop.growth[t]<-((Ntot[t])/(Ntot[t-1]+ 0.000001))
+
+}
+
+
+
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# 7. Elk Count Observation Model
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+
+for(t in 1:years){
+
+		y[t]~dpois(round(Ntot[t]+0.5)) 
+
+}
+
+} 
+
